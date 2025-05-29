@@ -124,6 +124,15 @@ app_license = "mit"
 # has_permission = {
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
+permission_query_conditions = {
+    "Book Appointment": "mediqueue.mediqueue.doctype.book_appointment.book_appointment.get_permission_query_conditions"
+}
+
+has_permission = {
+    "Book Appointment": "mediqueue.mediqueue.doctype.book_appointment.book_appointment.has_permission"
+}
+
+
 
 # DocType Class
 # ---------------
