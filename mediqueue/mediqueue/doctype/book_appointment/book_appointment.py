@@ -3,37 +3,48 @@
 
 import frappe
 from frappe.model.document import Document
-
+from frappe.utils import get_datetime, get_time
+from frappe.utils import logger
 frappe.utils.logger.set_log_level("DEBUG")
 logger = frappe.logger("BookAppointment", allow_site=True)
 
 class BookAppointment(Document):
-    def before_insert(self):
-        logger.debug("BookAppointment: " + str(self.start_time))
-        logger.debug("BookAppointment: " + str(self.end_time))
-        if self.start_time > self.end_time:
-            frappe.throw("Start time cannot be greater than end time")
-		# if start time - end time is greater than slot_size_in_mins then throw error
+	def before_insert(self):
+		self.status='Appointment Created'
+		start_time = get_time(self.start_time)
+		end_time = get_time(self.end_time)        
+		if start_time > end_time:
+			frappe.throw("Start time cannot be greater than end time.")        
+		# Get slot size in minutes from Doctor doctype
 		slot_size_in_mins = frappe.get_value("Doctor", self.doctor, "slot_size_in_mins")
-		if (self.end_time - self.start_time).total_seconds() > slot_size_in_mins * 60:
-			frappe.throw("End time cannot be greater than start time + slot size")
-		# fetch day from datetime_xqkn
-		day = self.start_time.strftime("%A")
-		# fetch availability from availability_xqkn
-		availability = frappe.get_value("Availability", {"doctor": self.doctor, "day": day}, "name")
-		if not availability:
-			frappe.throw("Availability not found for this doctor and day")
-		# check if start time is between start time and end time
-		if self.start_time < availability.start_time or self.start_time > availability.end_time:
-			frappe.throw("Start time is not between availability start time and end time")
-		# check if end time is between start time and end time
-		if self.end_time < availability.start_time or self.end_time > availability.end_time:
-			frappe.throw("End time is not between availability start time and end time")
+		if not slot_size_in_mins:
+			frappe.throw(f"Doctor {self.doctor} has no slot size defined.")        
+		# Check if time difference exceeds slot size
+		time_diff_minutes = (end_time.hour * 60 + end_time.minute) - (start_time.hour * 60 + start_time.minute)
+		if time_diff_minutes > slot_size_in_mins:
+			frappe.throw(f"Doctor slot size is {slot_size_in_mins} minutes. Please shorten the appointment duration.")        
+			# Get day name like 'Monday'
+		day = frappe.utils.get_datetime(self.start_time).strftime("%A")        
+		# Get doctor's availability for that day
+		doctor = frappe.get_doc("Doctor", self.doctor)
+		matching_availability = None
+		for row in doctor.slots:
+			if row.day == day:
+				matching_availability = row
+				break        
+		if not matching_availability:
+			frappe.throw(f"Doctor {self.doctor} is not available on {day}.")
+		available_start_time = get_time(str(matching_availability.start_time))
+		available_end_time = get_time(str(matching_availability.end_time))
+       
+		if start_time < available_start_time or end_time > available_end_time:
+			frappe.throw(
+				f"Appointment time must be between {available_start_time} and {available_end_time} on {day}."
+			)
+		overlapping_appointments = frappe.get_all("Book Appointment",filters={"doctor": self.doctor, "start_time": ["<", end_time], "end_time": [">", start_time] },fields=["name"])
+		if overlapping_appointments:
+			frappe.throw("Doctor already has an appointment during this time. Please choose another slot.")
 
-		# check for same doctor no other appointment at same date and time
-		appointment = frappe.get_all("Book Appointment", {"doctor": self.doctor, "start_time": ["between", [self.start_time, self.end_time]]})
-		if appointment:
-			frappe.throw("Doctor is not available at this time")	
 
 def has_permission(doc, ptype, user):
 	# frappe.throw(user)
@@ -51,13 +62,12 @@ def has_permission(doc, ptype, user):
 	return False
 
 def get_permission_query_conditions(user):
-	logger.debug("User: " + user)
+	logger.debug("User: " + str(user))
 	if "System Manager" in frappe.get_roles(user):
 		return ""	
 	doctor = frappe.get_value("Doctor", {"email": user}, "name")
-	logger.debug("Doctor: " + doctor)	
+	logger.debug("Doctor: " + str(doctor))	
 	patient = frappe.get_value("Patient", {"user_id": user}, "name")
-	logger.debug("Patient: " + patient)	
 	conditions = []
 	if doctor:
 		conditions.append(f"`tabBook Appointment`.doctor = '{doctor}'")
